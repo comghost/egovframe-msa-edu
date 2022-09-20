@@ -39,6 +39,7 @@ import java.util.Properties;
  *     수정일        수정자           수정내용
  *  ----------    --------    ---------------------------
  *  2021/08/09    jaeyeolkim  최초 생성
+ *  2022/09/22    신용호        File Upload / Download 취약점 개선
  * </pre>
  */
 @Slf4j
@@ -112,7 +113,8 @@ public class MessageSourceFiles {
         String ftpEnabled = environment.getProperty("ftp.enabled");
         // files 있는 경우 ftp 서버에 올린다.
         if ((StringUtils.hasLength(ftpEnabled) || "true".equals(ftpEnabled)) && !files.isEmpty()) {
-            storageUtils.storeFiles(files, "messages");
+        	//log.info("===>>> Message files = " + files.get(0).getPath());
+            storageUtils.storeFilesInitMessage(files, "messages");
         }
 
         return messages.size();

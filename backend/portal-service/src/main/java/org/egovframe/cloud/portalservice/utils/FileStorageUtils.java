@@ -1,14 +1,33 @@
 package org.egovframe.cloud.portalservice.utils;
 
-import lombok.Getter;
-import lombok.extern.slf4j.Slf4j;
-import org.apache.commons.io.FilenameUtils;
+import static org.egovframe.cloud.portalservice.utils.PortalUtils.getPhysicalFileName;
+
+import java.io.ByteArrayOutputStream;
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileNotFoundException;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.net.MalformedURLException;
+import java.net.URLConnection;
+import java.nio.file.Files;
+import java.nio.file.NoSuchFileException;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.nio.file.StandardCopyOption;
+import java.util.Base64;
+import java.util.List;
+
+import javax.annotation.PostConstruct;
+
 import org.egovframe.cloud.common.exception.BusinessException;
 import org.egovframe.cloud.common.exception.BusinessMessageException;
 import org.egovframe.cloud.common.exception.dto.ErrorCode;
 import org.egovframe.cloud.common.util.MessageUtil;
 import org.egovframe.cloud.portalservice.api.attachment.dto.AttachmentBase64RequestDto;
 import org.egovframe.cloud.portalservice.api.attachment.dto.AttachmentImageResponseDto;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.env.Environment;
 import org.springframework.core.io.Resource;
 import org.springframework.core.io.UrlResource;
@@ -16,15 +35,8 @@ import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 import org.springframework.web.multipart.MultipartFile;
 
-import javax.annotation.PostConstruct;
-import java.io.*;
-import java.net.MalformedURLException;
-import java.net.URLConnection;
-import java.nio.file.*;
-import java.util.Base64;
-import java.util.List;
-
-import static org.egovframe.cloud.portalservice.utils.PortalUtils.getPhysicalFileName;
+import lombok.Getter;
+import lombok.extern.slf4j.Slf4j;
 
 /**
  * org.egovframe.cloud.portalservice.utils.FileStorageUtils
@@ -41,6 +53,7 @@ import static org.egovframe.cloud.portalservice.utils.PortalUtils.getPhysicalFil
  *     수정일        수정자           수정내용
  *  ----------    --------    ---------------------------
  *  2021/07/13    shinmj  최초 생성
+ *  2022/09/22    신용호        File Upload / Download 취약점 개선
  * </pre>
  */
 @Slf4j
@@ -51,6 +64,9 @@ public class FileStorageUtils implements StorageUtils {
     private final Path fileStorageLocation;
     private final Environment environment;
     private final MessageUtil messageUtil;
+    
+    @Value("${fileUpload.extensions}")
+    private String whiteListFileUploadExtensions;
 
     public FileStorageUtils(Environment environment, MessageUtil messageUtil) {
         this.environment = environment;
@@ -135,6 +151,9 @@ public class FileStorageUtils implements StorageUtils {
     public String storeBase64File(AttachmentBase64RequestDto requestDto, String basePath) {
         String filename = getPhysicalFileName(requestDto.getOriginalName(), false);
 
+        // 확장자 검증
+        checkExtension(filename, whiteListFileUploadExtensions, messageUtil);
+        
         try {
             Path path = getStorePath(basePath);
             File file = path.resolve(filename).toFile();
@@ -174,15 +193,24 @@ public class FileStorageUtils implements StorageUtils {
      * @return
      */
     public String storeFile(MultipartFile file, String basePath, boolean isTemp) {
+    	
+        // 확장자 검증
+        checkExtension(file.getOriginalFilename(), whiteListFileUploadExtensions, messageUtil);
+    	
         String filename = getPhysicalFileName(file.getOriginalFilename(), isTemp);
 
         try {
+            if (basePath.contains("..")) {
+                log.error("basePath contains invalid path : " + basePath);
+                // 파일명이 잘못되었습니다.
+                throw new BusinessMessageException(messageUtil.getMessage("valid.file.invalid_path"));
+            }
             if (filename.contains("..")) {
                 log.error("Filename contains invalid path sequence : " + filename);
                 // 파일명이 잘못되었습니다.
-                throw new BusinessMessageException(messageUtil.getMessage("valid.file.invalid_name") + " : " + filename);
+                throw new BusinessMessageException(messageUtil.getMessage("valid.file.invalid_name"));
             }
-
+            
             Path path = getStorePath(basePath);
             Path target = path.resolve(filename);
             Files.copy(file.getInputStream(), target, StandardCopyOption.REPLACE_EXISTING);
@@ -198,6 +226,10 @@ public class FileStorageUtils implements StorageUtils {
     @Override
     public void storeFiles(List<File> files, String basePath) {
     }
+    
+	@Override
+	public void storeFilesInitMessage(List<File> files, String basePath) {
+	}
 
     /**
      * .temp 파일 생성하여 MultipartFile 저장
@@ -249,7 +281,15 @@ public class FileStorageUtils implements StorageUtils {
      */
     public Resource downloadFile(String filename) {
         Path path = getStorePath("");
+        if (filename.contains("..")) {
+            log.error("Filename contains invalid path sequence : " + filename);
+            // 파일명이 잘못되었습니다.
+            throw new BusinessMessageException(messageUtil.getMessage("valid.file.invalid_name"));
+        }
+        
         try {
+        	//log.info("===>>> request fullPath : "+path.toString());
+        	//log.info("===>>> request fullPath : "+path.resolve(filename).toUri());
             Resource resource = new UrlResource(path.resolve(filename).toUri());
 
             if (resource.exists()) {
@@ -316,4 +356,5 @@ public class FileStorageUtils implements StorageUtils {
             return false;
         }
     }
+
 }

@@ -5,6 +5,7 @@ import java.time.LocalDateTime;
 import java.time.temporal.ChronoUnit;
 import java.util.UUID;
 import org.apache.commons.io.FilenameUtils;
+import org.egovframe.cloud.common.exception.BusinessMessageException;
 import org.springframework.util.StringUtils;
 
 
@@ -23,6 +24,7 @@ import org.springframework.util.StringUtils;
  *     수정일        수정자           수정내용
  *  ----------    --------    ---------------------------
  *  2021/09/09    jaeyeolkim  최초 생성
+ *  2022/09/22    신용호        File Upload / Download 취약점 개선
  * </pre>
  */
 public class PortalUtils {
@@ -49,6 +51,7 @@ public class PortalUtils {
         sb.append(getUUID());
         sb.append(".");
         sb.append(ext);
+        sb.append(".upfile");
         if (isTemp) {
             sb.append(".temp");
         }

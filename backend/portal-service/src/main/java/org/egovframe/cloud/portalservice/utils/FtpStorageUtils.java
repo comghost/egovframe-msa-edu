@@ -15,6 +15,7 @@ import org.egovframe.cloud.common.exception.dto.ErrorCode;
 import org.egovframe.cloud.common.util.MessageUtil;
 import org.egovframe.cloud.portalservice.api.attachment.dto.AttachmentBase64RequestDto;
 import org.egovframe.cloud.portalservice.api.attachment.dto.AttachmentImageResponseDto;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.env.Environment;
 import org.springframework.core.io.Resource;
 import org.springframework.core.io.UrlResource;
@@ -53,6 +54,7 @@ import static org.egovframe.cloud.portalservice.utils.PortalUtils.getPhysicalFil
  *     수정일        수정자           수정내용
  *  ----------    --------    ---------------------------
  *  2021/09/09    jaeyeolkim  최초 생성
+ *  2022/09/22    신용호        File Upload / Download 취약점 개선
  * </pre>
  */
 @Slf4j
@@ -63,6 +65,9 @@ public class FtpStorageUtils implements StorageUtils {
     private final Environment environment;
     private final MessageUtil messageUtil;
 
+    @Value("${fileUpload.extensions}")
+    private String whiteListFileUploadExtensions;
+    
     public FtpStorageUtils(Environment environment, MessageUtil messageUtil) {
         this.environment = environment;
         this.messageUtil = messageUtil;
@@ -118,7 +123,7 @@ public class FtpStorageUtils implements StorageUtils {
         try {
             // connect
             ftpClient.setControlEncoding(StandardCharsets.UTF_8.name());
-            ftpClient.setConnectTimeout(3000);
+            ftpClient.setConnectTimeout(5000);
             ftpClient.connect(ftpClientDto.getHostname(), ftpClientDto.getPort());
 
             boolean login = ftpClient.login(ftpClientDto.getUsername(), ftpClientDto.getPassword());
@@ -162,8 +167,17 @@ public class FtpStorageUtils implements StorageUtils {
      * @param ftpClientDto
      * @param isList
      */
-    public void storeFile(FtpClientDto ftpClientDto, boolean isList) {
+    public void storeFile(FtpClientDto ftpClientDto, boolean isList, boolean isInit) {
         FTPClient ftpClient = ftpClientDto.getFtpClient();
+        
+        // 초기화시 메시지 파일을 생성하기 위해서 허용
+        String uploadExtensions = whiteListFileUploadExtensions;
+        if (isInit) {
+        	//log.info("===>>> Initiate Message Properites !!!");
+        	//log.info("===>>> uploadExtensions = " + uploadExtensions);
+        	uploadExtensions += ".properties";
+        }
+        
         try {
             // connect
             this.connect(ftpClientDto);
@@ -175,8 +189,13 @@ public class FtpStorageUtils implements StorageUtils {
             if (isList) {
                 List<File> files = ftpClientDto.getFiles();
                 for (File file : files) {
+                	checkExtension(file.getName(), uploadExtensions, messageUtil);
                     try (InputStream inputStream = new FileInputStream(file)) {
                         String remote = ftpClientDto.getPathname() + "/" + file.getName();
+                        //log.info("===>>> ftpClientDto.getPathname() = " + ftpClientDto.getPathname());
+                        //log.info("===>>> remote = " + remote);
+                        remote = remote.replaceAll("//", "/");
+                        //log.info("===>>> remote = " + remote);
 //                        String remote = "/mnt/messages/" + file.getName();
                         boolean storeFile = ftpClient.storeFile(remote, inputStream);
                         // 파일 권한 부여
@@ -186,6 +205,8 @@ public class FtpStorageUtils implements StorageUtils {
                 }
             } else {
                 MultipartFile file = ftpClientDto.getFile();
+                checkExtension(file.getOriginalFilename(), uploadExtensions, messageUtil);
+                
                 try (InputStream inputStream = file.getInputStream()) {
                     String remote = ftpClientDto.getRemote();
                     boolean storeFile = ftpClient.storeFile(remote, inputStream);
@@ -223,7 +244,7 @@ public class FtpStorageUtils implements StorageUtils {
 
         FtpClientDto ftpClientDto = new FtpClientDto(environment);
         ftpClientDto.addFile(file, basePath, filename);
-        this.storeFile(ftpClientDto, false);
+        this.storeFile(ftpClientDto, false, false);
 
         return filename;
     }
@@ -236,11 +257,27 @@ public class FtpStorageUtils implements StorageUtils {
      */
     @Override
     public void storeFiles(List<File> files, String basePath) {
+    	log.info("===>>> FTP storeFiles = " + files.get(0).getPath());
         FtpClientDto ftpClientDto = new FtpClientDto(environment);
         ftpClientDto.addFiles(files, basePath);
-        this.storeFile(ftpClientDto, true);
+        this.storeFile(ftpClientDto, true, false);
     }
 
+    /**
+     * 여러 파일 업로드 (초기메시지 파일 생성)
+     *
+     * @param files
+     * @param basePath
+     */
+    @Override
+    public void storeFilesInitMessage(List<File> files, String basePath) {
+    	log.info("===>>> FTP storeFiles = " + files.get(0).getPath());
+        FtpClientDto ftpClientDto = new FtpClientDto(environment);
+        ftpClientDto.addFiles(files, basePath);
+        this.storeFile(ftpClientDto, true, true);
+    }
+
+    
     /**
      * .temp 파일 생성하여 MultipartFile 저장
      *
@@ -299,6 +336,10 @@ public class FtpStorageUtils implements StorageUtils {
             FTPClient ftpClient = ftpClientDto.getFtpClient();
 
             String filename = getPhysicalFileName(requestDto.getOriginalName(), false);
+
+            // 확장자 검증
+            checkExtension(filename, whiteListFileUploadExtensions, messageUtil);
+            
             Base64.Decoder decoder = Base64.getDecoder();
             byte[] decodeBytes = decoder.decode(requestDto.getFileBase64().getBytes());
 
@@ -344,9 +385,17 @@ public class FtpStorageUtils implements StorageUtils {
      * @return
      */
     public Resource downloadFile(String filename) {
+    	
+    	if (filename.contains("..")) {
+            log.error("Filename contains invalid path sequence : " + filename);
+            // 파일명이 잘못되었습니다.
+            throw new BusinessMessageException(messageUtil.getMessage("valid.file.invalid_name"));
+        }
+    	
         try {
-            Resource resource = new UrlResource(environment.getProperty("file.url") + StringUtils.cleanPath("/" + filename));
-
+        	String fullPath = environment.getProperty("file.url") + StringUtils.cleanPath("/" + filename);
+            Resource resource = new UrlResource(fullPath);
+            log.info("===>>> FTP request fullPath : "+fullPath);
             if (resource.exists()) {
                 return resource;
             } else {
